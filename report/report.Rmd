@@ -1,0 +1,449 @@
+---
+title: "Limit Order Book Dynamics as an Absorbing Markov Chain"
+author: "Sadman Shayan, Shazia Aura Fathraya, Niluh Catherine Regina"
+date: "`r Sys.Date()`" #
+output:
+  pdf_document:
+      number_sections: true
+spacing: double
+header-includes:
+- \usepackage{fancyhdr}
+- \pagestyle{fancy}
+- \fancyhead[L]{LOB Dynamics as an Absorbing Markov Chain}
+- \fancyfoot[CO,CE]{}
+- \fancyfoot[LE,RO]{\thepage}
+- \usepackage{setspace}\doublespacing
+- \usepackage{fvextra}
+---
+
+```{=tex}
+\newpage
+\tableofcontents
+\newpage
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, comment = NA)
+library(data.table)
+
+# All numbers in the body come from files the analysis scripts wrote to
+# output/ (committed), so the report knits without the raw or processed data.
+out     <- function(f) file.path("..", "output", f)
+params  <- readRDS(out("params_MSFT.rds"))
+results <- fread(out("results_MSFT.csv"))
+bdiff   <- fread(out("brier_diff_MSFT.csv"))
+sens    <- fread(out("sensitivity_MSFT.csv"))
+assum   <- fread(out("assumptions_MSFT.csv"))
+f4  <- function(x) formatC(x, format = "f", digits = 4)
+big <- function(x) formatC(x, format = "d", big.mark = ",")
+
+# Table style used throughout: table[!htp], \small,
+# \caption, centred tabular with \hline. `rows` is a character matrix
+# already formatted as LaTeX; `header` is one LaTeX header line.
+tex_table <- function(header, rows, caption, label, align) {
+  body <- paste0(apply(as.matrix(rows), 1, paste, collapse = " & "), " \\\\")
+  cat("\\begin{table}[!htp]", "\\small", sprintf("\\caption{%s}", caption),
+      "\\begin{center}", sprintf("\\begin{tabular}{%s}", align), "\\hline",
+      paste0(header, " \\\\"), "\\hline", body, "\\hline", "\\end{tabular}",
+      sprintf("\\label{%s}", label), "\\end{center}", "\\end{table}", sep = "\n")
+}
+
+# Placeholder for text a team member still has to write.
+todo <- function(x) cat(sprintf("\\textit{[To be written: %s]}\n", x))
+```
+
+
+\newpage
+
+# Introduction
+
+At any moment, the front of a stock's limit order book consists of two queues: the shares waiting to buy at the best bid and the shares waiting to sell at the best ask. When the gap between them (the spread) is one tick, the price can only move when one of these queues runs out. If the ask queue empties, the best ask moves up a tick and the mid-price rises; if the bid queue empties, the mid-price falls. The next price move is therefore a race between two queues. In this report we ask: given the current sizes of the two queues, what is the probability that the next price move is up?
+
+A natural summary of the book is the queue imbalance $I=b/(b+a)$, where $b$ and $a$ are the bid and ask queue sizes. Gould and Bonart (2016) fitted logistic regressions of the direction of the next price move on $I$ for ten liquid Nasdaq stocks and found a strong relationship for every stock, especially for large-tick stocks, whose spread is almost always one tick. Cont, Stoikov and Talreja (2010) modelled the order book as a continuous-time Markov chain in which limit and market orders arrive as Poisson processes and each resting order is cancelled at its own rate, and computed price-move probabilities with Laplace transforms.
+
+We use a simplified version of their model: only the two best queues, removal probabilities that do not depend on queue size, the same probabilities on both sides, and queue sizes capped at $K$. This turns the problem into a two-dimensional Gambler's Ruin, which we solve with first-step analysis and the fundamental matrix of an absorbing chain. Neither the model nor the imbalance effect is ours. Our contribution is to (i) compare this one-parameter chain, which is never fitted to price moves, with the logistic regression of Gould and Bonart (2016) on the same data, (ii) test each of the chain's assumptions directly, and (iii) measure by simulation how much prediction error a broken assumption causes, here for the unit-step assumption.
+
+Section 2 reviews the model and the theory of absorbing chains. Section 3 applies it to 18 trading days of Microsoft (MSFT) order book data from November 2014, compares it with three other predictors and tests its assumptions. Section 4 concludes.
+
+# Review of the Topic
+
+## Definitions and Examples
+
+**State space.** We index time by event number $n=0,1,2,\dots$, so $n$ counts order book events, not seconds. Let $B_n$ and $A_n$ be the sizes of the best-bid and best-ask queues after event $n$, measured in units of $L$ shares. The state of the chain is $X_n=(B_n,A_n)$ on
+$$S=\{(b,a):1\le b,a\le K\}\cup\{U,D\},$$
+where $K$ is the largest queue size in the model, $U$ means the ask queue emptied (price up) and $D$ means the bid queue emptied (price down).
+
+**Transitions.** At each event exactly one queue changes by one unit. The bid grows with probability $\alpha$, the bid shrinks with probability $\beta$, the ask grows with probability $\alpha$ and the ask shrinks with probability $\beta$, where $\alpha,\beta>0$ and $2\alpha+2\beta=1$. A removal covers both cancellations and trades. From an interior state with $1<b,a<K$,
+$$P_{(b,a),(b+1,a)}=P_{(b,a),(b,a+1)}=\alpha,\qquad P_{(b,a),(b-1,a)}=P_{(b,a),(b,a-1)}=\beta.$$
+At the boundaries, a bid removal at $b=1$ goes to $D$, an ask removal at $a=1$ goes to $U$, a "grow" event at $K$ leaves the state unchanged, and $P_{UU}=P_{DD}=1$. Every row of $\mathbf{P}$ sums to $\alpha+\beta+\alpha+\beta=1$. This is Gambler's Ruin with two fortunes instead of one, so each interior state has four neighbours instead of two.
+
+**Assumptions.** The model assumes the Markov property and time-homogeneity,
+$$P(X_{n+1}=j\mid X_n=i,\,X_{n-1}=i_{n-1},\dots,X_0=i_0)=P(X_{n+1}=j\mid X_n=i)=P_{ij},$$
+so only the current book matters and the same probabilities apply at every event, all day. It also assumes that every event moves a queue by exactly one unit and that the probabilities do not depend on the queue sizes. We test all four assumptions in Section 3.4.
+
+**Classification of states.** Since $P_{UU}=P_{DD}=1$, the states $U$ and $D$ are absorbing and $\{U\}$, $\{D\}$ are closed classes. Because $\alpha,\beta>0$, all interior states communicate, and they are transient: from $(b,a)$, $b$ bid removals in a row (probability $\beta^b>0$) take the chain to $D$, which it never leaves (Appendix A.1). The chain is therefore not irreducible. It is absorbed in $U$ or $D$ with probability 1, any distribution with mass only on $U$ and $D$ is stationary, and where the chain ends up depends on where it starts. Usually that is the awkward case; here it is exactly what we want, since the current book determines which absorbing state the chain is likely to reach.
+
+**Quantities of interest.** Define the hitting time $\tau=\min\{n\ge 0: X_n\in\{U,D\}\}$ and
+$$h(b,a)=P(X_\tau=U\mid X_0=(b,a)),\qquad t(b,a)=E[\tau\mid X_0=(b,a)],$$
+the probability that the next price move is up and the expected number of events until the price moves.
+
+**Example ($K=2$, $\alpha=\tfrac16$, $\beta=\tfrac13$).** Here removals are twice as common as additions. The transient states are $(1,1),(1,2),(2,1),(2,2)$, and we write $x_1,x_2,x_3,x_4$ for $h$ at these states. From $(2,1)$, a bid addition is capped and the chain stays at $(2,1)$, a bid removal goes to $(1,1)$, an ask addition goes to $(2,2)$, and an ask removal empties the ask and goes to $U$, so $x_3=\tfrac16x_3+\tfrac13x_1+\tfrac16x_4+\tfrac13(1)$. Writing the same first-step equation for every state, with $h(U)=1$ and $h(D)=0$, and multiplying by 6:
+\begin{align}
+6x_1&=x_2+x_3+2, \label{eq:h1}\\
+5x_2&=2x_1+x_4, \label{eq:h2}\\
+5x_3&=2x_1+x_4+2, \label{eq:h3}\\
+4x_4&=2x_2+2x_3. \label{eq:h4}
+\end{align}
+From \eqref{eq:h4}, $x_4=\tfrac12(x_2+x_3)$, and from \eqref{eq:h1}, $x_2+x_3=6x_1-2$, so $x_4=3x_1-1$. Substituting into \eqref{eq:h2} gives $5x_2=5x_1-1$, so $x_2=x_1-\tfrac15$, and into \eqref{eq:h3} gives $5x_3=5x_1+1$, so $x_3=x_1+\tfrac15$. Putting these into \eqref{eq:h1} gives $6x_1=2x_1+2$, so $x_1=\tfrac12$ and
+$$h(1,1)=h(2,2)=\tfrac12,\qquad h(1,2)=\tfrac{3}{10},\qquad h(2,1)=\tfrac{7}{10}.$$
+From bid 2, ask 1 the next price move is up with probability 0.7. Two checks: equal queues give even odds, and swapping bid and ask gives $h(1,2)=1-h(2,1)$. The same method gives $t(1,1)=1.95$, $t(1,2)=t(2,1)=2.85$ and $t(2,2)=4.35$ events (Appendix A.2).
+
+## Details of the topic
+
+**First-step analysis.** For a transient state $i$, conditioning on $X_1$ and using the Markov property and time-homogeneity (once the chain is at $j$ it behaves like a new chain started at $j$),
+$$h(i)=\sum_{j\in S}P_{ij}\,h(j),\quad h(U)=1,\ h(D)=0;\qquad t(i)=1+\sum_{j \text{ transient}}P_{ij}\,t(j).$$
+At an interior state this reads $h(b,a)=\alpha\,h(b+1,a)+\beta\,h(b-1,a)+\alpha\,h(b,a+1)+\beta\,h(b,a-1)$: the probability of an up move is a weighted average of the same probability at the four neighbours. There is one linear equation per transient state.
+
+**Canonical form and the fundamental matrix.** Ordering the transient states first,
+$$\mathbf{P}=\begin{bmatrix}\mathbf{Q}&\mathbf{R}\\ \mathbf{0}&\mathbf{I}\end{bmatrix},$$
+where $\mathbf{Q}$ holds the transient-to-transient and $\mathbf{R}$ the transient-to-absorbing probabilities. Stacking the first-step equations over all transient states gives
+$$(\mathbf{I}-\mathbf{Q})\mathbf{H}=\mathbf{R},\qquad (\mathbf{I}-\mathbf{Q})\mathbf{t}=\mathbf{1},\qquad\text{so}\qquad \mathbf{H}=\mathbf{N}\mathbf{R},\quad \mathbf{t}=\mathbf{N}\mathbf{1},\quad \mathbf{N}=(\mathbf{I}-\mathbf{Q})^{-1}=\sum_{n\ge 0}\mathbf{Q}^n,$$
+where the $U$ column of $\mathbf{H}$ holds $h$. Transience gives $\mathbf{Q}^n\to\mathbf{0}$, so the series converges, and $N_{ij}$ is the expected number of visits to $j$ before absorption, starting from $i$ (Appendix A.3). For the example above, our solver reproduces the hand values of $h$ and $t$ exactly (Appendix B). With $K=155$ there are $K^2=24{,}025$ transient states, but each row of $\mathbf{Q}$ has at most four non-zero entries, so we store $\mathbf{Q}$ as a sparse matrix and solve $(\mathbf{I}-\mathbf{Q})\mathbf{H}=\mathbf{R}$ directly rather than inverting.
+
+**Link to continuous time.** Think of each event type as an independent exponential clock: additions ring at rate $\lambda$ and removals at rate $\mu$ per second on each side, and the next event is whichever clock rings first. By memorylessness, a clock that has not rung is as good as new, so after every event the race restarts and only the new queue sizes carry forward. This is why the model is Markov. A given clock rings first with probability equal to its rate over the total rate $2\lambda+2\mu$, so $X_n$ is the embedded jump chain of a continuous-time Markov chain with generator $\mathbf{G}$ (we write $\mathbf{G}$ because $\mathbf{Q}$ is already the transient block), and
+$$\alpha=\frac{\lambda}{2\lambda+2\mu},\qquad \beta=\frac{\mu}{2\lambda+2\mu},\qquad E[\text{seconds until the price moves}\mid X_0=i]=\frac{t(i)}{2\lambda+2\mu}.$$
+Bursts in event timing change how long we wait for a price move, but not $h$, which depends only on the order of event types.
+
+# Application
+
+## Data and estimation
+
+**Data.** We use the order book data that accompanies Cartea, Jaimungal and Penalva (2015), downloaded from Sebastian Jaimungal's University of Toronto web page. For Microsoft (MSFT) it covers 18 trading days in November 2014, with a snapshot of the best bid and ask prices and sizes every 100 milliseconds and a list of market orders. We use 10:00 to 15:30 each day, which leaves 3,564,018 snapshots; checks for empty, crossed and off-grid books removed none (Appendix B). MSFT is a large-tick stock: the spread is exactly one tick (\$0.01) 99.2% of the time (98.5–99.7% across days), so the price moves when a queue empties, as the model requires.
+
+**Events.** The data are snapshots, not individual orders, so we compare consecutive snapshots. If the best prices are unchanged, a rise (fall) in bid size is a bid addition (removal), and likewise for the ask; if a best price changes, the interval is a price event (Appendix B). Several orders in one interval appear as a single net change. We set $L=100$ shares, one round lot: the median nonzero net change is 109 shares and 86.5% of changes are multiples of 100. A queue of $s$ shares has $\lceil s/L\rceil$ units, capped at $K=155$, the 99th percentile of queue size divided by $L$.
+
+**Estimation.** The first 11 trading days (3–17 November) are used for estimation and the last 7 (18–26 November) for testing. Under the model the event types are independent with probabilities $(\alpha,\beta,\alpha,\beta)$, so the maximum likelihood estimators are (Appendix A.4)
+$$\hat\alpha=\frac{n_{BA}+n_{AA}}{2n},\qquad \hat\beta=\frac{n_{BR}+n_{AR}}{2n},$$
+where $n_{BA},n_{BR},n_{AA},n_{AR}$ count bid additions, bid removals, ask additions and ask removals, and $n$ is their total. The removal that empties a queue appears in the data as a price event, so for each price event we add one removal on the side that emptied (13,371 in total). Counting only intervals that start at a one-tick spread, this gives
+$$\hat\alpha=0.2572\ \ (95\%\ \text{CI } [0.2566,\,0.2579]),\qquad \hat\beta=0.2428,\qquad n=600{,}915,$$
+compared with $\hat\alpha=0.2631$ without the correction. Additions slightly outnumber removals. The interval assumes independent events, which Section 3.4 questions, so it is too narrow.
+
+## Evaluation design
+
+At each whole second of the window when the spread is one tick, we record $(b,a)$ in units, $I=b/(b+a)$, and $Y=1$ if the next mid-price change is up and $Y=0$ if it is down; samples whose next change falls after 15:30 are dropped. This gives 215,819 training and 137,160 test samples. Sampling on a clock grid avoids recording the book just before each move, when the emptying queue is nearly gone and every predictor would look excellent.
+
+We compare four predictors of $P(Y=1)$: the null $\hat p=0.5$; the naive imbalance $\hat p=I$; our chain $\hat p=h(b,a)$ at $(\hat\alpha,\hat\beta)$; and the logistic regression $\log\{p/(1-p)\}=c_0+c_1 I$ of Gould and Bonart (2016), fitted on the training days. The logistic regression has two parameters chosen to predict $Y$; the chain has one, estimated without ever looking at $Y$.
+
+Our main score is the Brier score $\frac{1}{M}\sum_{k=1}^{M}(\hat p_k-Y_k)^2$ over the $M$ test samples, for which the null predictor scores exactly 0.25. We also report log loss and AUC (Appendix A.5) and a calibration plot with ten equal-count bins. Neighbouring seconds often wait for the same price move, so samples within a day are dependent. For Brier differences we therefore report 95% bootstrap intervals that resample whole test days (2,000 resamples); with only 7 test days, these intervals are rough.
+
+## Results
+
+```{r results-table, results = "asis"}
+# Scores (results_MSFT.csv) and chain-minus-X Brier differences with their
+# day-bootstrap intervals (brier_diff_MSFT.csv) in one table.
+lab <- c("null (0.5)"             = "Null ($\\hat p = 0.5$)",
+         "naive I"                = "Naive imbalance $I$",
+         "chain, corrected alpha" = "Chain $h(b,a)$",
+         "logistic on I (train)"  = "Logistic on $I$")
+cmp <- c("null (0.5)"            = "chain_minus_null",
+         "naive I"               = "chain_minus_naive",
+         "logistic on I (train)" = "chain_minus_logistic")
+r <- results[match(names(lab), predictor)]
+d <- bdiff[match(cmp[r$predictor], comparison)]
+rows <- cbind(lab[r$predictor], f4(r$brier), f4(r$log_loss),
+              formatC(r$auc, format = "f", digits = 3),
+              ifelse(is.na(d$estimate), "--", f4(d$estimate)),
+              ifelse(is.na(d$estimate), "--",
+                     sprintf("[%s, %s]", f4(d$ci_low), f4(d$ci_high))),
+              ifelse(is.na(d$estimate), "--", sprintf("%d of 7", d$days_chain_better)))
+tex_table(paste("Predictor & Brier & Log loss & AUC & Chain $-$ this & 95\\% CI",
+                "& Days chain better"), rows,
+          paste("Predictive performance on the 7 test days. The last three columns",
+                "give the chain's Brier score minus this predictor's (negative",
+                "favours the chain), a 95\\% interval from resampling whole test days",
+                "(2000 bootstrap draws), and the number of test days on which the",
+                "chain's Brier score is lower."),
+          "tab:results", "|l|ccc|ccc|")
+```
+
+Table \ref{tab:results} compares the four predictors on the 7 test days. The chain beats the null predictor and the naive rule on every test day. Its Brier score is lower than the null's by 0.0107 (95% CI [0.0067, 0.0150]) and lower than the naive rule's by 0.0096 ([0.0063, 0.0128]), so it removes about 4% of the null predictor's error, while the naive rule removes less than 1%. The logistic regression is better than the chain by 0.0023 ([0.0005, 0.0042]) and wins on 6 of the 7 days. A one-parameter model that never sees a price move captures most, but not all, of what the fitted benchmark captures.
+
+```{r calib, fig.cap = "Calibration on the test days: mean predicted probability against the observed share of up-moves, in 10 equal-count bins.", out.width = "6in", fig.align = "center"}
+knitr::include_graphics(out("calibration_MSFT.png"))
+```
+
+In Figure \ref{fig:calib}, eight of the chain's ten bins have mean predictions between 0.35 and 0.65 and lie close to the 45-degree line; only the two outer bins are too extreme (mean prediction 0.21 with 35% of moves up, and 0.79 with 74%). The naive rule's points lie on a much flatter line, so it is overconfident throughout: its lowest bin predicts 0.12 where 35% of moves are up, and its highest predicts 0.87 where 75% are.
+
+The chain's predictions are cautious for a structural reason. Typical queues hold about 40 units on each side, and with $\hat\alpha>\hat\beta$ a unit-step chain drifts away from zero, so it needs an enormous number of events to empty either queue and $h(b,a)$ stays close to 0.5 unless one queue is short. In the data, half of all price moves come within 19 net changes (mean 40). The same drift makes $t(b,a)$ at typical states grow by orders of magnitude as $K$ increases, while $h$ barely changes (Table \ref{tab:tK} in Appendix B), so we use $h$ for prediction and treat $t$ only as a sign that unit steps are unrealistic.
+
+## Testing the assumptions
+
+```{r assum-table, results = "asis"}
+an <- c("A1 Markov (consecutive types)" = "A1: event types independent",
+        "A2 time of day"                = "A2: same probabilities all day",
+        "A3 queue size"                 = "A3: same probabilities at every queue size",
+        "A4 one unit per event"         = "A4: one unit per event",
+        "Timing (exponential gaps)"     = "Timing: exponential gaps")
+en <- c("Cramer's V"               = "Cram\\'er's $V$",
+        "share of events > 1 unit" = "share of events $> 1$ unit",
+        "CV - 1"                   = "CV $-$ 1")
+pv <- ifelse(is.na(assum$p_value), "--",
+             ifelse(assum$p_value < 1e-16, "$< 10^{-16}$",
+                    sprintf("$%s$", formatC(assum$p_value, format = "e", digits = 1))))
+rows <- cbind(an[assum$test], pv, en[assum$effect_name],
+              formatC(assum$effect, format = "f", digits = 3))
+tex_table("Assumption & $p$-value & Effect size & Value", rows,
+          paste("Tests of the chain's assumptions on the training days. With this",
+                "many events every test rejects; the effect size shows how large",
+                "each departure is. Plots are in Appendix B",
+                "(Figure~\\ref{fig:assum-fig})."),
+          "tab:assump", "|l|ccc|")
+```
+
+With hundreds of thousands of events every chi-square test rejects ($p\approx 0$), so Table \ref{tab:assump} reports effect sizes (Cramér's $V$). The Markov assumption (A1) shows the largest departure ($V=0.27$). Using intervals with a single event, after a removal the next event is an addition on the same side half the time, against 0.28 if events were independent: queues refill quickly after a removal. Unit steps (A4) also fail badly. Only half of all changes are one unit, and in the interval where a queue empties a median of 15 units (1,500 shares) disappears at once, so queues are often cleared in chunks rather than one unit at a time. Time-homogeneity (A2) and size-independence (A3) fail only mildly ($V=0.027$ and $0.028$): $\hat\alpha$ rises from 0.245 at 10:00 to 0.268 at 15:00, and short queues see slightly fewer removals. Event timing is bursty (coefficient of variation 1.33, against 1 for exponential gaps), which affects waiting times but not $h$. The four-panel figure is in Appendix B.
+
+## Simulation study
+
+We ran a reduced simulation study: a sanity check and one scenario that breaks only A4; A1-A3 are not simulated. Table \ref{tab:sim} compares scenarios on reliability, the miscalibration term of the Murphy decomposition of the Brier score (ten equal-count bins), not on total Brier, because simulated outcomes are far more predictable than real ones and total Brier mostly reflects how easy each world is to predict. In the sanity check, $Y\sim\text{Bernoulli}(h(b,a))$ at the 137,160 test states (20 repeats), and reliability is about $2\times10^{-5}$, the level of sampling noise. For A4 we simulate both queues in shares from the same test states, with event types drawn independently with probabilities $(\hat\alpha,\hat\beta,\hat\alpha,\hat\beta)$ and sizes drawn from the training days, including the 13,371 chunks removed when a queue emptied. Every path was absorbed within the 20,000-event cap (median 42 events). Scored with $h$ at $L=1000$, reliability is 0.0002, against 0.0115 on the real data, so breaking A4 alone accounts for little of the chain's miscalibration at that unit size. Scored with $h$ at $L=100$, the same paths give 0.0082, more than the 0.0029 observed: with real sizes a queue loses 37 shares per event on average, while the unit-step chain with $\hat\alpha>\hat\beta$ expects queues to grow.
+
+```{r sim-table, results = "asis"}
+sim <- fread(out("simulation_MSFT.csv"))
+sim <- sim[, .(rel = mean(rel)), by = .(scenario, L)]   # one row per scenario and L
+lab <- c("real data"     = "Real test data",
+         "sanity"        = "Sanity: $Y\\sim\\text{Bernoulli}(h)$",
+         "A4 real sizes" = "A4 broken: real event sizes")
+rows <- cbind(lab[sim$scenario], sim$L, formatC(1000 * sim$rel, format = "f", digits = 2))
+tex_table("Scenario & $L$ & Reliability ($\\times 10^{-3}$)", rows,
+          paste("Reliability of the baseline $h$ by scenario (lower is better",
+                "calibrated). The two A4 rows score the same simulated paths with",
+                "$h$ at $L = 1000$ and at $L = 100$."),
+          "tab:sim", "|l|c|c|")
+```
+
+# Conclusion
+
+A two-dimensional Gambler's Ruin with a single parameter, estimated from counts of queue changes without looking at price moves, predicts the direction of the next MSFT price move better than guessing and better than the naive imbalance rule on every test day, and comes close to a logistic regression fitted directly to the outcomes. Its main weaknesses are visible in the data: events are not independent, since queues refill quickly after removals, and queues are often cleared in large chunks rather than one unit at a time. Chunked clearing is consistent with the chain's probabilities staying close to 0.5 at realistic queue sizes, but it does not account for most of the chain's error: in a simulation that breaks only the unit-step assumption, the chain at $L=1000$ stays almost perfectly calibrated (reliability 0.0002, against 0.0115 on the real data). Where the rest of the error comes from is open, because the other departures (A1-A3) were not simulated.
+
+**Limitations.** We observe only net changes between 100 ms snapshots, not every order, cancellation and trade, so $\hat\alpha$ and $\hat\beta$ approximate the event-level probabilities, and the independence test uses only intervals with a single event. The data cover one stock over 18 days in November 2014, and market structure may have changed since. With 7 test days, the bootstrap intervals are rough. The simulation study covers only the sanity check and A4.
+
+## Contributions
+
+Sadman Shayan wrote all of the code (solver and tests, data pipeline, estimation, evaluation and assumption tests), produced the results, and assembled the report. Shazia Aura Fathraya wrote the Introduction, the Review of the Topic and the derivations in Appendix A. Niluh Catherine Regina wrote the data, estimation and evaluation design sections. All three members wrote the conclusion and prepared the presentation.
+
+# References
+
+Cartea, Á., Jaimungal, S., and Penalva, J. (2015). *Algorithmic and High-Frequency Trading*. Cambridge University Press. Data from https://sebastian.statistics.utoronto.ca/books/algo-and-hf-trading/data/
+
+Cont, R., Stoikov, S., and Talreja, R. (2010). A stochastic model for order book dynamics. *Operations Research*, 58(3), 549–563.
+
+Gould, M. D., and Bonart, J. (2016). Queue imbalance as a one-tick-ahead price predictor in a limit order book. *Market Microstructure and Liquidity*, 2(2), 1650006.
+
+Grinstead, C. M., and Snell, J. L. (1997). *Introduction to Probability* (2nd ed.). American Mathematical Society.
+
+Norris, J. R. (1997). *Markov Chains*. Cambridge University Press.
+
+\newpage
+
+# Appendix
+
+## A. Derivations
+
+**A.1 Transience of the interior states.** Start at $(b,a)$. With probability $\beta^b$ the next $b$ events are all bid removals, which takes the chain to $D$, and from $D$ it never returns. Hence
+$$P(\text{never return to }(b,a)\mid X_0=(b,a))\ge\beta^b>0,\qquad\text{so}\qquad f_{(b,a)}\le 1-\beta^b<1,$$
+where $f_i$ is the probability of ever returning to $i$. Every interior state is therefore transient.
+
+**A.2 Expected number of events in the example.** With $K=2$, $\alpha=\tfrac16$, $\beta=\tfrac13$, let $y_1,y_2,y_3,y_4$ be $t(1,1),t(1,2),t(2,1),t(2,2)$. Reading off the same transitions as in Section 2.1, with $t(U)=t(D)=0$, and multiplying by 6:
+\begin{align}
+6y_1&=6+y_2+y_3, \label{eq:t1}\\
+5y_2&=6+2y_1+y_4, \label{eq:t2}\\
+5y_3&=6+2y_1+y_4, \label{eq:t3}\\
+4y_4&=6+2y_2+2y_3. \label{eq:t4}
+\end{align}
+From \eqref{eq:t1}, $y_2+y_3=6y_1-6$. Substituting into \eqref{eq:t4}: $4y_4=6+2(6y_1-6)=12y_1-6$, so $y_4=3y_1-\tfrac32$. Substituting into \eqref{eq:t2}: $5y_2=6+2y_1+3y_1-\tfrac32=5y_1+\tfrac92$, so $y_2=y_1+\tfrac{9}{10}$, and \eqref{eq:t3} has the same right-hand side, so $y_3=y_1+\tfrac{9}{10}$. Putting both into \eqref{eq:t1}: $6y_1=6+2y_1+\tfrac95$, so $4y_1=\tfrac{39}{5}$ and $y_1=\tfrac{39}{20}$. Then
+$$t(1,1)=\tfrac{39}{20}=1.95,\qquad t(1,2)=t(2,1)=\tfrac{57}{20}=2.85,\qquad t(2,2)=\tfrac{87}{20}=4.35.$$
+
+**A.3 The fundamental matrix and expected visits.** Because every interior state is transient, $\mathbf{Q}^n\to\mathbf{0}$, so $(\mathbf{I}-\mathbf{Q})(\mathbf{I}+\mathbf{Q}+\dots+\mathbf{Q}^m)=\mathbf{I}-\mathbf{Q}^{m+1}\to\mathbf{I}$ and $\mathbf{N}=(\mathbf{I}-\mathbf{Q})^{-1}=\sum_{n\ge0}\mathbf{Q}^n$. Let $V_j=\sum_{n\ge0}\mathbf{1}\{X_n=j\}$ be the number of visits to transient state $j$ before absorption. Taking expectations term by term,
+$$E[V_j\mid X_0=i]=\sum_{n\ge0}P(X_n=j\mid X_0=i)=\sum_{n\ge0}(\mathbf{Q}^n)_{ij}=N_{ij}.$$
+Only $\mathbf{Q}$ appears because a path that is still at a transient state at step $n$ has used only transient-to-transient steps. Every step before absorption is spent at some transient state, so $\tau=\sum_j V_j$, which gives $\mathbf{t}=\mathbf{N}\mathbf{1}$ again.
+
+**A.4 Maximum likelihood estimator of $\alpha$.** Under the model the event types are independent, with probabilities $\alpha,\beta,\alpha,\beta$ for bid addition, bid removal, ask addition and ask removal, and $\beta=\tfrac12-\alpha$. Up to a constant,
+$$\log L(\alpha)=(n_{BA}+n_{AA})\log\alpha+(n_{BR}+n_{AR})\log\beta.$$
+Differentiating, using $d\beta/d\alpha=-1$, and setting the result to zero gives $(n_{BA}+n_{AA})/\alpha=(n_{BR}+n_{AR})/\beta$, i.e. $(n_{BA}+n_{AA})\beta=(n_{BR}+n_{AR})\alpha$. Adding $(n_{BA}+n_{AA})\alpha$ to both sides and using $\alpha+\beta=\tfrac12$ gives $\tfrac12(n_{BA}+n_{AA})=n\alpha$, so $\hat\alpha=(n_{BA}+n_{AA})/(2n)$ and $\hat\beta=(n_{BR}+n_{AR})/(2n)$. The second derivative, $-(n_{BA}+n_{AA})/\alpha^2-(n_{BR}+n_{AR})/\beta^2$, is negative, so this is a maximum. Since $2\hat\alpha$ is a proportion of $n$ events, $\mathrm{Var}(\hat\alpha)\approx\alpha(\tfrac12-\alpha)/n$, giving the interval $\hat\alpha\pm1.96\sqrt{\hat\alpha(\tfrac12-\hat\alpha)/n}$.
+
+**A.5 Log loss and AUC.** With $M$ test samples, $M_1$ up moves and $M_0$ down moves,
+\begin{align*}
+\text{LogLoss}&=-\frac1M\sum_{k=1}^{M}\Big[Y_k\log\hat p_k+(1-Y_k)\log(1-\hat p_k)\Big],\\
+\text{AUC}&=\frac{1}{M_1M_0}\sum_{k:Y_k=1}\ \sum_{j:Y_j=0}\Big(\mathbf{1}\{\hat p_k>\hat p_j\}+\tfrac12\mathbf{1}\{\hat p_k=\hat p_j\}\Big).
+\end{align*}
+The null predictor scores $\log 2\approx0.693$ and an AUC of exactly 0.5. Since $b,a\ge1$, every predictor gives $0<\hat p_k<1$, so the log loss is finite. AUC measures only ranking: $h(b,a)$ and $I$ rank most states the same way, so they can have similar AUC even when one is much better calibrated.
+
+## B. Additional tables and figures
+
+```{r cleaning-table, results = "asis"}
+# Counts printed by R/01_parse.R (all 18 MSFT days); no rows failed any check.
+rows <- rbind(c("Raw snapshots (18 days $\\times$ 234{,}000)", "4,212,000"),
+              c("Keep 10:00:00.000--15:30:00.000",              "3,564,018"),
+              c("Drop empty side",                              "3,564,018"),
+              c("Drop crossed or locked book",                  "3,564,018"),
+              c("Drop prices off the one-cent grid",            "3,564,018"))
+tex_table("Step & Snapshots remaining", rows,
+          "Cleaning steps, all 18 MSFT days.", "tab:clean", "|l|r|")
+```
+
+```{r events-table, results = "asis"}
+rows <- rbind(c("Best bid or best ask price changed",            "PX (price move)"),
+              c("Prices unchanged, net bid size $> 0$ / $< 0$", "BA / BR"),
+              c("Prices unchanged, net ask size $> 0$ / $< 0$", "AA / AR"),
+              c("Nothing changed at level 1",                    "no event"))
+tex_table("Change over one 100 ms interval & Event", rows,
+          "Event classification. One interval can give a bid event and an ask event.",
+          "tab:events", "|l|c|")
+```
+
+
+**Solver check of the $K = 2$ example.** Running the solver used for the data (R/model.R) on the example of Section 2.1 reproduces the hand values of $h$ and $t$:
+
+```{r k2-table, results = "asis"}
+# Worked example, solved by the same solver used for the data (R/model.R).
+source(file.path("..", "R", "model.R"))
+h2 <- h_table(2, 1/6, 1/3)
+t2 <- t_table(2, 1/6, 1/3)
+st <- expand.grid(a = 1:2, b = 1:2)[, c("b", "a")]
+rows <- cbind(sprintf("$(%d,%d)$", st$b, st$a),
+              formatC(h2[cbind(st$b, st$a)], format = "f", digits = 2),
+              formatC(t2[cbind(st$b, st$a)], format = "f", digits = 2))
+tex_table("State $(b,a)$ & $h(b,a)$ & $t(b,a)$", rows,
+          paste("Worked example, $K = 2$, $\\alpha = 1/6$, $\\beta = 1/3$:",
+                "probability the next move is up and expected number of events",
+                "until it happens."),
+          "tab:k2", "|c|cc|")
+```
+
+In matrix form, with states ordered $(1,1), (1,2), (2,1), (2,2)$:
+
+```{r k2-matrix, results = "asis"}
+P2 <- build_P(2, 1/6, 1/3)
+Q2 <- as.matrix(P2[1:4, 1:4])
+R2 <- as.matrix(P2[1:4, 5:6])
+N2 <- solve(diag(4) - Q2)  # inverted here only to display N; the solver never does
+H2 <- N2 %*% R2
+mat <- function(M, d = 0) {
+  paste(apply(M, 1, function(r) paste(formatC(r, format = "f", digits = d),
+                                      collapse = " & ")),
+        collapse = " \\\\ ")
+}
+cat(sprintf(paste0("$$20\\,\\mathbf{N} = \\begin{pmatrix} %s \\end{pmatrix}, \\qquad ",
+                   "\\mathbf{H} = \\mathbf{N}\\mathbf{R} = ",
+                   "\\begin{pmatrix} %s \\end{pmatrix},$$\n"),
+            mat(20 * N2), mat(H2, 2)))
+cat(sprintf(paste("with row sums of $\\mathbf{N}$ (expected events until the price",
+                  "moves) %s.\n"),
+            paste(formatC(rowSums(N2), format = "f", digits = 2), collapse = ", ")))
+```
+
+```{r sens-table, results = "asis"}
+rows <- cbind(sens$L, sens$K, f4(sens$brier), f4(sens$log_loss),
+              formatC(sens$auc, format = "f", digits = 3))
+tex_table("$L$ (shares) & $K$ & Brier & Log loss & AUC", rows,
+          "The chain on the test days under other unit sizes $L$ and caps $K$.",
+          "tab:sens", "|cc|ccc|")
+```
+
+```{r tK-table, results = "asis"}
+# Solved at the corrected estimates for each cap K. h(40,40) = 0.5 at every K
+# by symmetry, so h(10,40) shows that h is also stable where it is not 0.5.
+rows <- t(sapply(c(100, 155, 250), function(K) {
+  s  <- solve_chain(K, params$alpha_corr, params$beta_corr)
+  # s$h and s$tau are K x K matrices with entry [b, a]; index them as such.
+  # (state_index() gives the row of P, not a position in these matrices.)
+  tt <- s$tau[40, 40]
+  ex <- floor(log10(tt))
+  c(K, sprintf("$%.1f \\times 10^{%d}$", tt / 10^ex, ex),
+    f4(s$h[40, 40]), f4(s$h[10, 40]))
+}))
+tex_table("$K$ & $t(40,40)$ & $h(40,40)$ & $h(10,40)$", rows,
+          paste("Expected number of events until the price moves, and the",
+                "probability that it moves up, under three caps $K$ ($L = 100$,",
+                "corrected $\\hat\\alpha$)."),
+          "tab:tK", "|c|c|cc|")
+```
+
+```{r heatmap, fig.cap = "The chain's probability that the next move is up, $h(b,a)$, at the corrected estimates.", out.width = "75%", fig.align = "center"}
+knitr::include_graphics(out("heatmap_h_MSFT.png"))
+```
+
+```{r assum-fig, fig.cap = "Assumption checks on the training days: A1 transition probabilities, A2 $\\hat\\alpha$ by half-hour, A3 removal probability by queue size, timing QQ plot.", out.width = "100%", fig.align = "center"}
+knitr::include_graphics(out("assumptions_MSFT.png"))
+```
+
+
+\newpage
+
+## C. All R code
+
+```{=tex}
+\singlespacing
+\scriptsize
+\fvset{breaklines=true}
+```
+
+**C.1 Code in this report.**
+
+```{r ref.label = knitr::all_labels(), echo = TRUE, eval = FALSE, tidy = "formatR", tidy.opts = list(comment = FALSE, width.cutoff = I(80))}
+```
+
+**C.2 Analysis scripts** (run in this order from the project root; see README).
+
+```{r script-tidy, include = FALSE}
+# Print each script without its comments (the .R files keep them). formatR
+# parses the code, so a "#" inside a string is left alone.
+script <- function(f) {
+  # I(80) makes 80 an upper bound; formatR warns about strings it cannot split.
+  x <- suppressWarnings(formatR::tidy_source(text = readLines(file.path("..", "R", f)),
+         comment = FALSE, output = FALSE, width.cutoff = I(80))$text.tidy)
+  x <- unlist(strsplit(x, "\n"))
+  x <- x[cumsum(nzchar(trimws(x))) > 0]                     # leading blank lines
+  x[!(!nzchar(trimws(x)) & c(FALSE, !nzchar(trimws(head(x, -1)))))]  # repeated blank lines
+}
+```
+
+**R/model.R**
+
+```{r code-model, code = script("model.R"), echo = TRUE, eval = FALSE}
+```
+
+**R/tests.R**
+
+```{r code-tests, code = script("tests.R"), echo = TRUE, eval = FALSE}
+```
+
+**R/01_parse.R**
+
+```{r code-01, code = script("01_parse.R"), echo = TRUE, eval = FALSE}
+```
+
+**R/02_events.R**
+
+```{r code-02, code = script("02_events.R"), echo = TRUE, eval = FALSE}
+```
+
+**R/03_estimate.R**
+
+```{r code-03, code = script("03_estimate.R"), echo = TRUE, eval = FALSE}
+```
+
+**R/04_validate.R**
+
+```{r code-04, code = script("04_validate.R"), echo = TRUE, eval = FALSE}
+```
+
+**R/05_assumptions.R**
+
+```{r code-05, code = script("05_assumptions.R"), echo = TRUE, eval = FALSE}
+```
+
+**R/06_simulation.R**
+
+```{r code-06, code = script("06_simulation.R"), echo = TRUE, eval = FALSE}
+```

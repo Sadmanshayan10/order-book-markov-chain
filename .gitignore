@@ -1,0 +1,22 @@
+# R
+.Rhistory
+.RData
+.Rproj.user/
+.Rapp.history
+
+# Raw data: never committed
+data/raw/*
+!data/raw/.gitkeep
+
+# Build outputs
+output/*.pdf
+report/*.pdf
+!report/report.pdf
+
+# macOS
+.DS_Store
+
+# Processed files rebuilt from raw data (too large to commit)
+data/processed/*.rds
+data/processed/events_MSFT.csv
+data/processed/samples_MSFT.csv

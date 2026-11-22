@@ -1,0 +1,6 @@
+test,statistic,stat_name,df,p_value,effect,effect_name
+A1 Markov (consecutive types),49920.7430519396,chi-square,9,0,0.270876179311227,Cramer's V
+A2 time of day,431.737436811657,chi-square,10,1.63696326666297e-86,0.0268042297579765,Cramer's V
+A3 queue size,484.461972902501,chi-square,15,1.0902902422573e-93,0.0283937872710192,Cramer's V
+A4 one unit per event,1.61,median units,,,0.500650164072818,share of events > 1 unit
+Timing (exponential gaps),1.33123062398616,CV of gaps,,,0.331230623986164,CV - 1
