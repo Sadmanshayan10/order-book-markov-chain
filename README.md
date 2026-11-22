@@ -45,7 +45,7 @@ The data accompany Cartea, Jaimungal & Penalva (2015), *Algorithmic and High-Fre
 From the project root:
 
 ```sh
-Rscript setup.R                      # installs the R packages (and TinyTeX if no LaTeX is found)
+Rscript setup.R                      # R packages, plus TinyTeX if needed
 for s in R/0[1-6]_*.R; do Rscript "$s"; done
 Rscript R/tests.R                    # should end with "35 passed, 0 failed"
 Rscript -e 'rmarkdown::render("report/report.Rmd")'
